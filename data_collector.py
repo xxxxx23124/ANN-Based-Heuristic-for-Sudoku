@@ -177,7 +177,7 @@ class DataCollector:
                         continue
 
                 except UnsolvableSudoku:
-                    # 如果 solve() 抛出异常，说明棋盘已不可解，我们成功了！
+                    # 如果 solve() 抛出异常，说明棋盘已不可解
                     return temp_board, True
 
         # 如果遍历完所有空格和所有候选都无法找到一个狡猾错误
