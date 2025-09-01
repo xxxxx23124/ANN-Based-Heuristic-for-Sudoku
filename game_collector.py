@@ -58,6 +58,7 @@ class GameCollector:
         sampled_difficulty = np.random.beta(alpha, beta)
         return sampled_difficulty
 
+# --- main 函数用于测试 ---
 if __name__ == "__main__":
     print(type(Sudoku(3).difficulty(difficulty=0.5)))
     x = GameCollector(difficulty=0.5,concentration=10)
