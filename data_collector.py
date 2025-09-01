@@ -117,46 +117,52 @@ class DataCollector:
                              solution: np.ndarray,
                              empty_cells: list[tuple[int, int]]) -> tuple[np.ndarray, bool]:
         """
-        注入一个简单的、随机的错误。
-        同时保证棋盘一定出错。
+        注入一个简单的、局部冲突的错误。
+        该方法直接选择一个空格，并填入一个与其所在行、列或宫内已有数字冲突的数字。
         """
         if not empty_cells:
             return board, False
 
-        while len(empty_cells):
-            error_cell_idx = np.random.randint(len(empty_cells))
-            r, c = empty_cells[error_cell_idx]
+        # 随机打乱空格列表，以增加随机性
+        np.random.shuffle(empty_cells)
 
-            correct_answer = solution[r, c]
-            cunning_candidates = list(set(range(1, self.grid_size + 1)) - {correct_answer})
-            temp_board = board.copy()
-            np.random.shuffle(cunning_candidates)
-            for move in cunning_candidates:
-                temp_board[r, c] = move
-                temp_board_list = [[int(val) if val != 0 else None for val in row] for row in temp_board]
+        for r, c in empty_cells:
+            # 找出该位置所有已使用的数字（冲突数字）
+            # 检查行和列
+            row_nums = set(board[r, :])
+            col_nums = set(board[:, c])
 
-                try:
-                    # 尝试求解这个被污染的棋盘
-                    puzzle_to_check = Sudoku(self.sub_grid_size, board=temp_board_list)
-                    solved_puzzle = puzzle_to_check.solve(assert_solvable=True)  # assert_solvable=True 会在无解时抛出UnsolvableSodoku异常
+            # 检查sub grid
+            start_row = (r // self.sub_grid_size) * self.sub_grid_size
+            start_col = (c // self.sub_grid_size) * self.sub_grid_size
+            box_nums = set(
+                board[start_row:start_row + self.sub_grid_size, start_col:start_col + self.sub_grid_size].flatten())
 
-                    if solved_puzzle.validate():
-                        continue
+            # 合并所有冲突数字，并排除0（代表空格）
+            used_nums = row_nums.union(col_nums, box_nums)
+            used_nums.discard(0)
 
-                except UnsolvableSudoku:
-                    # 如果 solve() 抛出异常，说明棋盘已不可解
-                    return temp_board, True
-            # 排除这个格子
-            del empty_cells[error_cell_idx]
+            # 如果存在可用的冲突数字，就随机选一个填入
+            if used_nums:
+                # 将集合转换为列表以便随机选择
+                error_candidates = list(used_nums)
+                error_move = np.random.choice(error_candidates)
 
-        # 这是完全失败的情况，反正就是没改成
+                # 创建副本并注入错误
+                board_with_error = board.copy()
+                board_with_error[r, c] = error_move
+
+                # 成功注入错误，直接返回
+                return board_with_error, True
+
+        # 如果遍历了所有空格都找不到任何可以制造冲突的数字（理论上不太可能发生），则返回失败
         return board, False
 
     def _inject_cunning_error(self,
                               board: np.ndarray,
                               solution: np.ndarray,
                               empty_cells: list[tuple[int, int]],
-                              timeout: float = 4.0
+                              timeout: float = 16.0
                               ) -> tuple[np.ndarray, bool]:
         """
         尝试向棋盘注入一个“狡猾”的错误。
