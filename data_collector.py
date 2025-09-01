@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import numpy as np
+import time
 
 from game_collector import GameCollector
 from sudoku import Sudoku
@@ -72,10 +73,10 @@ class DataCollector:
                 # 决定注入哪种类型的错误
                 if np.random.random() < cunning_error_prob:
                     # 尝试注入“狡猾”的错误
-                    board_after_injection, success = self.__inject_cunning_error(problem_board.copy(),
-                                                                                 solution_board,
-                                                                                 empty_cells
-                                                                                 )
+                    board_after_injection, success = self._inject_cunning_error(problem_board.copy(),
+                                                                                solution_board,
+                                                                                empty_cells
+                                                                                )
                     if success:
                         problem_board = board_after_injection
                         is_error_injected = True
@@ -83,10 +84,10 @@ class DataCollector:
                 # 如果狡猾错误没有成功注入，或者随机决定注入简单错误
                 if not is_error_injected:
                     # 注入简单错误
-                    board_after_injection, success = self.__inject_simple_error(problem_board.copy(),
-                                                                                solution_board,
-                                                                                empty_cells
-                                                                                )
+                    board_after_injection, success = self._inject_simple_error(problem_board.copy(),
+                                                                               solution_board,
+                                                                               empty_cells
+                                                                               )
                     if success:
                         problem_board = board_after_injection
                         is_error_injected = True
@@ -111,40 +112,72 @@ class DataCollector:
         y = np.array(y_list, dtype=np.int64)
         return X, y
 
-    def __inject_simple_error(self,
-                              board: np.ndarray,
-                              solution: np.ndarray,
-                              empty_cells: list[tuple[int, int]]) -> tuple[np.ndarray, bool]:
+    def _inject_simple_error(self,
+                             board: np.ndarray,
+                             solution: np.ndarray,
+                             empty_cells: list[tuple[int, int]]) -> tuple[np.ndarray, bool]:
         """
         注入一个简单的、随机的错误。
+        同时保证棋盘一定出错。
         """
         if not empty_cells:
             return board, False
 
-        error_cell_idx = np.random.randint(len(empty_cells))
-        r, c = empty_cells[error_cell_idx]
+        while len(empty_cells):
+            error_cell_idx = np.random.randint(len(empty_cells))
+            r, c = empty_cells[error_cell_idx]
 
-        correct_answer = solution[r, c]
-        possible_errors = list(set(range(1, self.grid_size + 1)) - {correct_answer})
+            correct_answer = solution[r, c]
+            cunning_candidates = list(set(range(1, self.grid_size + 1)) - {correct_answer})
+            temp_board = board.copy()
+            np.random.shuffle(cunning_candidates)
+            for move in cunning_candidates:
+                temp_board[r, c] = move
+                temp_board_list = [[int(val) if val != 0 else None for val in row] for row in temp_board]
 
-        if not possible_errors:
-            return board, False  # 理论上不会发生
+                try:
+                    # 尝试求解这个被污染的棋盘
+                    puzzle_to_check = Sudoku(self.sub_grid_size, board=temp_board_list)
+                    solved_puzzle = puzzle_to_check.solve(assert_solvable=True)  # assert_solvable=True 会在无解时抛出UnsolvableSodoku异常
 
-        error_digit = np.random.choice(possible_errors)
-        board[r, c] = error_digit
-        return board, True
+                    if solved_puzzle.validate():
+                        continue
 
-    def __inject_cunning_error(self,
-                               board: np.ndarray,
-                               solution: np.ndarray,
-                               empty_cells: list[tuple[int, int]]) -> tuple[np.ndarray, bool]:
+                except UnsolvableSudoku:
+                    # 如果 solve() 抛出异常，说明棋盘已不可解
+                    return temp_board, True
+            # 排除这个格子
+            del empty_cells[error_cell_idx]
+
+        # 这是完全失败的情况，反正就是没改成
+        return board, False
+
+    def _inject_cunning_error(self,
+                              board: np.ndarray,
+                              solution: np.ndarray,
+                              empty_cells: list[tuple[int, int]],
+                              timeout: float = 4.0
+                              ) -> tuple[np.ndarray, bool]:
         """
         尝试向棋盘注入一个“狡猾”的错误。
-        返回修改后的棋盘和是否成功的标志。
+
+        Args:
+            board (np.ndarray): 当前棋盘状态。
+            solution (np.ndarray): 正确的解。
+            empty_cells (list[tuple[int, int]]): 可供填写的空格列表。
+            timeout (float): 允许寻找狡猾错误的最大时间（秒）。
+
+        Returns:
+            Tuple[np.ndarray, bool]: 修改后的棋盘和是否成功的标志。
         """
         np.random.shuffle(empty_cells)  # 随机化空格顺序
+        start_time = time.monotonic()  # 记录开始时间，monotonic() 不受系统时间更改影响，适合计时
 
         for r, c in empty_cells:
+            # 在处理下一个空格之前检查时间
+            if time.monotonic() - start_time > timeout:
+                return board, False
+
             # 找到所有局部合法的数字
             legal_moves = self.__get_legal_moves(board, r, c)
 
@@ -160,6 +193,10 @@ class DataCollector:
 
             # 验证这些候选是否真的能破坏解
             for move in cunning_candidates:
+                # 在尝试下一个候选数字之前检查时间
+                if time.monotonic() - start_time > timeout:
+                    return board, False
+
                 temp_board = board.copy()
                 temp_board[r, c] = move
 
@@ -180,7 +217,7 @@ class DataCollector:
                     # 如果 solve() 抛出异常，说明棋盘已不可解
                     return temp_board, True
 
-        # 如果遍历完所有空格和所有候选都无法找到一个狡猾错误
+        # 如果遍历完所有可能都无法找到狡猾错误（或中途超时退出了循环）
         return board, False
 
     def __get_legal_moves(self,
