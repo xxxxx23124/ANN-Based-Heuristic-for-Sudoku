@@ -157,30 +157,15 @@ class OfflineDataGenerator(DataCollector):
 
 # --- main 函数用于测试 ---
 if __name__ == "__main__":
-    game_gen = GameCollector(difficulty=0.5, concentration=10)
-    data_generator = OfflineDataGenerator(game_collector=game_gen)
-
-    HDF5_FILE = "sudoku_dataset_appendable.h5"
-
-    # 第一次运行：生成 500 个样本
-    print("--- 第一次运行 ---")
-    data_generator.generate_and_save(
-        filepath=HDF5_FILE,
-        num_games=500
-    )
-
-    print("\n" + "=" * 50 + "\n")
-    time.sleep(2)  # 稍作停顿，模拟两次分开的运行
-
-    # 第二次运行：再生成 300 个样本，追加到同一个文件
-    print("--- 第二次运行（追加模式）---")
-    data_generator.generate_and_save(
-        filepath=HDF5_FILE,
-        num_games=300
-    )
-
-    # 验证最终文件
-    print("\n--- 验证最终文件内容 ---")
-    with h5py.File(HDF5_FILE, 'r') as f:
-        print(f"最终文件 '{HDF5_FILE}' 包含 {f['ids'].shape[0]} 个样本。")
-        # 预期的样本数应该是 500 + 300 = 800 左右（取决于每次有多少有效样本生成）
+    for _ in range(1024):
+        game_gen = GameCollector(difficulty=0.5, concentration=20)
+        data_generator = OfflineDataGenerator(game_collector=game_gen)
+        HDF5_FILE = "sudoku_dataset_train.h5"
+        # 生成 500 个样本
+        data_generator.generate_and_save(
+            filepath=HDF5_FILE,
+            num_games=512
+        )
+        # 验证最终文件
+        with h5py.File(HDF5_FILE, 'r') as f:
+            print(f"文件 '{HDF5_FILE}' 包含 {f['ids'].shape[0]} 个样本。")
