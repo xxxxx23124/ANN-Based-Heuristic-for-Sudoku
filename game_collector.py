@@ -41,7 +41,7 @@ class GameCollector:
             games_list.append(puzzle)
         return games_list
 
-    def __set_current_difficulty(self, target_difficulty: float) -> None:
+    def set_current_difficulty(self, target_difficulty: float) -> None:
         if not 0 < target_difficulty < 1:
             raise ValueError("Target Difficulty must be between 0 and 1.")
         self.current_difficulty = target_difficulty
