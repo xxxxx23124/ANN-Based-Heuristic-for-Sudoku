@@ -77,57 +77,69 @@ class SudokuEnv(gym.Env):
         return self._current_board, self._get_info()
 
     def step(self, action: int) -> tuple[np.ndarray, float, bool, bool, dict]:
+        self._episode_steps += 1
+        reward = 0.0  # 使用浮点数初始化奖励
+
         # 解码动作
         row, col, num = self._decode_action(action)
-        # 在执行任何有效步骤之前，增加步数计数器
-        self._episode_steps += 1
+        info = self._get_info()  # 提前准备 info
 
-        # 检查动作是否在初始空格上
+        # 检查最严重的错误：修改固定数字
         if (row, col) not in self._empty_cells_initial:
-            # 对于无效动作（尝试修改固定数字），给予较大惩罚并保持状态不变
-            reward = -20  # 或者一个更大的惩罚值
+            reward = -3.0  # 最严厉的单步惩罚
             terminated = False
-            truncated = False
-            info = self._get_info()
-            info["error"] = f"Invalid move: cell ({row}, {col}) is a pre-filled number."
+            truncated = self._episode_steps >= self.max_episode_steps
+            info["error"] = f"Invalid move: cannot modify pre-filled cell ({row}, {col})."
+            # 这种情况下，棋盘状态不应改变
             return self._current_board, reward, terminated, truncated, info
 
-        # 计算奖励并更新棋盘
-        reward = 0
+        # 检查并惩罚重复/无用动作
+        current_val = self._current_board[row, col]
+        if current_val == num:
+            reward -= 0.2  # 惩罚无用功
+            info["error"] = f"Redundant move: cell ({row}, {col}) already contains {num}."
+            # 注意：即使是无用功，我们仍然执行它并继续后续检查，因为它可能会触发超时
 
-        # 检查是否造成明显冲突
+        # 检查是否违反数独规则 (硬约束)
+        # 我们需要一个临时棋盘来检查这一步是否会造成冲突
+        temp_board = self._current_board.copy()
+        temp_board[row, col] = num  # 假设执行了动作
         if not self._is_move_legal(row, col, num):
-            reward += -10  # 冲突惩罚
+            reward -= 2.0  # 核心惩罚
+            info["error"] = f"Constraint violation by placing {num} at ({row}, {col})."
 
-        # 每走一步都应用一个小的负奖励
-        reward += -1
+        # 应用步数成本
+        reward -= 0.02
 
-        # 应用动作到棋盘
+        # 检查是否是逻辑上确定的步骤 未实现
+        # if self._is_forced_move(row, col, num):
+        #     reward += 0.5
+
+        # 应用动作到真实棋盘
         self._current_board[row, col] = num
 
-        # 检查游戏是否结束
+        # 检查游戏结束状态
         terminated = False
-        truncated = False
+        is_full = np.all(self._current_board != 0)
 
-        # 检查是否完成 (棋盘已满)
-        if np.all(self._current_board != 0):
-            # 棋盘已满，检查是否是正确解
+        if is_full:
             if self._is_board_complete_and_valid(self._current_board):
-                reward += 150  # 成功解出
+                reward += 10.0  # 成功解出！
                 terminated = True
             else:
-                # 棋盘填满但答案错误
-                reward += -50  # 可以设置一个较大的最终惩罚
+                reward -= 5.0  # 填满但错误
                 terminated = True
 
-        # 检查是否达到最大步数
+        # 检查是否超时
+        truncated = False
         if not terminated and self._episode_steps >= self.max_episode_steps:
-            truncated = True # episode 因超时而结束，而非达到最终状态
+            reward -= 1.0  # 对超时给予轻微惩罚
+            truncated = True
 
         if self.render_mode == "human":
             self.render()
 
-        return self._current_board, reward, terminated, truncated, self._get_info()
+        return self._current_board, reward, terminated, truncated, info
 
     def render(self):
         if self.render_mode == "human":

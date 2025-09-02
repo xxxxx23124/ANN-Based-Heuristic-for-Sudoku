@@ -85,7 +85,7 @@ class TimeSpaceSudokuModel(nn.Module):
                  device: torch.device):
         super().__init__()
         # 为了方便直接在这里配置超参数了
-        self.d_model = 512
+        self.d_model = 768
 
         self.grid_size = grid_size
 
@@ -106,7 +106,7 @@ class TimeSpaceSudokuModel(nn.Module):
                                            )
         self.backbone = TimeSpaceChunk(self.backbone_args, device=device)
 
-        self.value_d_model = 128
+        self.value_d_model = 256
         # 配置策略网络
         self.actorhead_args = NetworkConfig(self.d_model,
                                             (grid_size * grid_size) * 2,
@@ -205,8 +205,6 @@ class TimeSpaceSudokuModel(nn.Module):
         value = self.critichead_output(value).squeeze(-1)
         # B, S, L -> B, S, 1
         value = torch.mean(value, dim=-1, keepdim=True)
-        # map value to [-1, 1]
-        value = F.tanh(value)
 
         return action_logits, value, new_cache_list
 
