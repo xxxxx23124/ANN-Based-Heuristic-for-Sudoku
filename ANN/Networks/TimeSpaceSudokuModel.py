@@ -79,19 +79,19 @@ class SpaceChunk(nn.Module):
         return x
 
 
-class TimeSpaceChessModel(nn.Module):
-    def __init__(self, H:int, W:int ,device: torch.device):
+class TimeSpaceSudokuModel(nn.Module):
+    def __init__(self,
+                 grid_size: int,
+                 device: torch.device):
         super().__init__()
         # 为了方便直接在这里配置超参数了
         self.d_model = 512
-        self.value_d_model = 128
 
-        self.H = H
-        self.W = W
+        self.grid_size = grid_size
 
         # 卷积升维
         self.conv = nn.Conv2d(
-            111,
+            10,
             self.d_model,
             3,
             1,
@@ -101,23 +101,24 @@ class TimeSpaceChessModel(nn.Module):
 
         # 配置主干网络
         self.backbone_args = NetworkConfig(self.d_model,
-                                           (H*W)*2,
-                                           timespaceblock_num=38,
+                                           (grid_size * grid_size) * 2,
+                                           timespaceblock_num=16,
                                            )
         self.backbone = TimeSpaceChunk(self.backbone_args, device=device)
 
+        self.value_d_model = 128
         # 配置策略网络
         self.actorhead_args = NetworkConfig(self.d_model,
-                                           (H*W)*2,
-                                           timespaceblock_num=38,
-                                           )
+                                            (grid_size * grid_size) * 2,
+                                            timespaceblock_num=16,
+                                            )
         self.actorhead = TimeSpaceChunk(self.actorhead_args, device=device)
-        self.actorhead_output = nn.Linear(self.d_model, 73, device=device)
+        self.actorhead_output = nn.Linear(self.d_model, grid_size, device=device)
         
         # 配置价值网络
         self.critic_args = NetworkConfig(self.value_d_model,
-                                         (H*W)*2,
-                                         spatialfusion_block_num=6,
+                                         (grid_size * grid_size) * 2,
+                                         spatialfusion_block_num=4,
                                          timespaceblock_num=1
                                          )
         self.critichead_begin_args = FeedForwardConfig(d_model=self.d_model,
@@ -140,13 +141,13 @@ class TimeSpaceChessModel(nn.Module):
     def forward(        
             self,
             x:Tensor,
-            cache_list2:list[list[Mamba2InferenceCache]] | None=None,
+            cache_list: list[list[Mamba2InferenceCache]] | None=None,
             ) -> tuple[Tensor, Tensor, list[list[Mamba2InferenceCache]]]:
         B, S, H, W, C = x.shape
-        if cache_list2 is not None:
-            cache_backbone_list = cache_list2[0]
-            cache_policy_list = cache_list2[1]
-            cache_value_list = cache_list2[2]
+        if cache_list is not None:
+            cache_backbone_list = cache_list[0]
+            cache_policy_list = cache_list[1]
+            cache_value_list = cache_list[2]
         else:
             cache_backbone_list = None
             cache_policy_list = None
@@ -157,30 +158,30 @@ class TimeSpaceChessModel(nn.Module):
         x = F.gelu(self.conv(x))
         x = rearrange(x, "(b s) d h w -> b s (h w) d", s=S)
         # x形状转变为：B, S, L, D
-        new_cache_list2 = []
+        new_cache_list = []
         # 主干
         x_backbone, new_cache_backbone_list = self.backbone(
                                                 x,
-                                                self.H,
-                                                self.W,
+                                                self.grid_size,
+                                                self.grid_size,
                                                 self.rotary_emb,
                                                 cache_backbone_list,
                                                 )
-        new_cache_list2.append(new_cache_backbone_list)
+        new_cache_list.append(new_cache_backbone_list)
 
         # 策略
         action_logits, cache_list1 = self.actorhead(
                                                 x_backbone,
-                                                self.H,
-                                                self.W,
+                                                self.grid_size,
+                                                self.grid_size,
                                                 self.rotary_emb,
                                                 cache_policy_list,
                                                 )
-        new_cache_list2.append(cache_list1)
-        # action B, S, L, D -> B, S, L, 73
+        new_cache_list.append(cache_list1)
+        # action B, S, L, D -> B, S, L, grid_size
         action_logits = self.actorhead_output(action_logits)
+        # action B, S, grid_size ** 3
         action_logits = rearrange(action_logits, "b s l d -> b s (l d)")
-        # action B, S, 4672
 
         # 价值
         # 这一步先降维
@@ -188,16 +189,16 @@ class TimeSpaceChessModel(nn.Module):
 
         value, cache_list1 = self.critichead_timespace(
                                                 value_input,
-                                                self.H,
-                                                self.W,
+                                                self.grid_size,
+                                                self.grid_size,
                                                 self.rotary_emb,
                                                 cache_value_list,
                                                 )
-        new_cache_list2.append(cache_list1)
+        new_cache_list.append(cache_list1)
 
         value = self.critichead_space(value,
-                                      self.H,
-                                      self.W,
+                                      self.grid_size,
+                                      self.grid_size,
                                       self.rotary_emb,
                                       )
         # B, S, L, D_low -> B, S, L
@@ -207,7 +208,7 @@ class TimeSpaceChessModel(nn.Module):
         # map value to [-1, 1]
         value = F.tanh(value)
 
-        return action_logits, value, new_cache_list2
+        return action_logits, value, new_cache_list
 
 
 def print_model_parameters_by_module(model):
@@ -254,17 +255,17 @@ def print_model_summary(model, model_name="Model"):
 def test():
     for _ in range(1):
         """
-        测试函数，修改为处理长序列（800），并使用分块、缓存和梯度累积。
+        测试函数，修改为处理长序列（150），并使用分块、缓存和梯度累积。
         """
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         if not torch.cuda.is_available():
             print("CUDA is not available. Testing on CPU. Memory usage will not be representative.")
             return
 
-        H, W = 8, 8
+        H, W = 9, 9
         BATCH_SIZE = 1
-        TOTAL_SEQUENCE_LENGTH = 1  # 总序列长度
-        INPUT_CHANNELS = 111
+        TOTAL_SEQUENCE_LENGTH = 150  # 总序列长度
+        INPUT_CHANNELS = 10
 
         print(f"--- Model Test for Long Sequence Processing ---")
         print(f"Device: {device}")
@@ -273,7 +274,7 @@ def test():
 
         # 1. 初始化模型
         try:
-            model = TimeSpaceChessModel(H, W, device)
+            model = TimeSpaceSudokuModel(H, device)
             model.to(device)
             print("Model initialized successfully.")
         except Exception as e:
@@ -283,8 +284,8 @@ def test():
         # 2. 创建完整的模拟输入和目标
         # 输入形状: (B, S_total, H, W, C)
         full_input_tensor = torch.randn(BATCH_SIZE, TOTAL_SEQUENCE_LENGTH, H, W, INPUT_CHANNELS, device=device)
-        # 目标策略形状: (B, S_total, 4672)
-        full_target_policy = torch.randn(BATCH_SIZE, TOTAL_SEQUENCE_LENGTH, 4672, device=device)
+        # 目标策略形状: (B, S_total, 729)
+        full_target_policy = torch.randn(BATCH_SIZE, TOTAL_SEQUENCE_LENGTH, 729, device=device)
         # 目标价值形状: (B, S_total, 1)
         full_target_value = torch.randn(BATCH_SIZE, TOTAL_SEQUENCE_LENGTH, 1, device=device)
 
@@ -304,7 +305,7 @@ def test():
             # --- 梯度累积和分块处理 ---
             optimizer.zero_grad()  # 在循环开始前清零梯度
 
-            cache_list2 = None  # 初始化缓存为空
+            cache_list = None  # 初始化缓存为空
             total_loss_accumulated = 0.0
 
             print("\nStarting chunk processing...")
@@ -337,7 +338,7 @@ def test():
                 # --- 前向传播 ---
                 # 使用 checkpoint 来节省显存
                 # 将上一个块的 cache 传入
-                policy_pred, value_pred, cache_list2 = model(chunk_input, cache_list2)
+                policy_pred, value_pred, cache_list = model(chunk_input, cache_list)
 
                 # --- 计算损失 ---
                 policy_loss = loss_fn(policy_pred, chunk_target_policy)
