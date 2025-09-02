@@ -43,7 +43,7 @@ class DataCollector:
 
         for puzzle in sudoku_puzzles:
             try:
-                solved_puzzle = puzzle.solve()
+                solved_puzzle = puzzle.solve(assert_solvable=True)
                 # 检查返回的是否是有效的Sudoku对象
                 if solved_puzzle is None:
                     # 如果谜题本身无解 (py-sudoku库有时会生成)，跳过

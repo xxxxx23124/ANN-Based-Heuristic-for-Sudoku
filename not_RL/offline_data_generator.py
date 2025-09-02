@@ -2,13 +2,12 @@
 
 import numpy as np
 import h5py
-import time
 import uuid
 from tqdm import tqdm
 import os
 
 from game_collector import GameCollector
-from data_collector import DataCollector
+from not_RL.data_collector import DataCollector
 from sudoku.sudoku import UnsolvableSudoku
 
 
@@ -79,9 +78,9 @@ class OfflineDataGenerator(DataCollector):
         # 遍历谜题，处理并生成数据
         for puzzle in tqdm(sudoku_puzzles, desc="[DataGen]"):
             try:
-                solution_board_raw = puzzle.solve().board
+                solution_board_raw = puzzle.solve(assert_solvable=True).board
                 difficulty = puzzle.get_difficulty()
-            except (UnsolvableSudoku, AttributeError):
+            except UnsolvableSudoku:
                 continue
 
             solution_board = np.array([[v or 0 for v in r] for r in solution_board_raw], dtype=np.int8)
