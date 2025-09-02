@@ -17,4 +17,5 @@
 
 ## 当前状态
 
-**开发中**。当前主要任务是完成ppo算法的编写。有点累，想休息一会。
+**开发中**。当前主要任务是完成ppo算法的编写。有点累，想休息一会。ppo算法的模板可能会继承 [RL_mamba2-selfAttention-ppo/legacy
+/ppo_transformer_ssm.py](https://github.com/xxxxx23124/RL_mamba2-selfAttention-ppo/blob/main/legacy/ppo_transformer_ssm.py)。会使用GAE。
