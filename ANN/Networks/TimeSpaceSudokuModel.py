@@ -6,77 +6,14 @@ from einops import rearrange
 from torch.utils.checkpoint import checkpoint
 from ANN.Layers.Mamba2_layer.InferenceCache import Mamba2InferenceCache
 from ANN.Networks.NetworkConfig import NetworkConfig
-from ANN.Blocks.TimeSpaceBlock import TimeSpaceBlock
 from ANN.Layers.Norm_layer.RMSNorm import RMSNorm
 from ANN.Blocks.SpatialFusion_block import SpatialFusion_block
 from ANN.Layers.FeedForward_layer.SwiGLUMlp import SwiGLUFeedForward
 from ANN.Layers.Transformer_layer.RotaryEmbedding import RotaryEmbedding
 from ANN.Layers.FeedForward_layer.FeedForwardConfig import FeedForwardConfig
 
-class TimeSpaceChunk(nn.Module):
-    def __init__(self, args: NetworkConfig, device: torch.device):
-        super().__init__()
-        self.args = args
-        self.device = device
-
-        # TimeSpaceBlocks
-        if self.args.timespaceblock_num > 0:
-            self.timespace_blocks = nn.ModuleList(
-                [TimeSpaceBlock(args.block_args, device) for _ in range(args.timespaceblock_num)]
-            )
-        else:
-            self.timespace_blocks = None
-
-    def forward(        
-            self,
-            x:Tensor,
-            H: int,
-            W: int,
-            rotary_emb: RotaryEmbedding | None = None,
-            cache_list:list[Mamba2InferenceCache] | None=None,
-            ) -> tuple[Tensor, list[Mamba2InferenceCache]]:
-        # 这里的输入形状为: B, S, L, D
-        new_cache_list=[]
-        # 1. 处理 TimeSpaceBlocks
-        if self.timespace_blocks is not None:
-            for i, block in enumerate(self.timespace_blocks):
-                if cache_list is not None:
-                    cache = cache_list[i]
-                else:
-                    cache = None
-                x, cache = checkpoint(block,x,H,W,rotary_emb,cache)
-                new_cache_list.append(cache)
-        
-        return x, new_cache_list
-        
-class SpaceChunk(nn.Module):
-    def __init__(self, args: NetworkConfig, device: torch.device):
-        super().__init__()
-        self.args = args
-        self.device = device
-
-        # SpaceBlocks
-        if self.args.spatialfusion_block_num > 0:
-            self.space_blocks = nn.ModuleList(
-                [SpatialFusion_block(args.block_args.transformer_args, device) for _ in range(args.spatialfusion_block_num)]
-            )
-        else:
-            self.space_blocks = None
-
-    def forward(        
-            self,
-            x:Tensor,
-            H: int,
-            W: int,
-            rotary_emb: RotaryEmbedding | None = None,
-            ) -> Tensor:
-        # 这里的输入形状为: B, S, L, D_low
-        # 输出形状为: B, S, L, D_low
-        # 处理空间讯息
-        if self.space_blocks is not None:
-            for i, block in enumerate(self.space_blocks):
-                x = checkpoint(block, x, H, W, rotary_emb)
-        return x
+from ANN.Networks.TimeSpaceChunk import TimeSpaceChunk
+from ANN.Networks.SpaceChunk import SpaceChunk
 
 
 class TimeSpaceSudokuModel(nn.Module):
@@ -170,14 +107,14 @@ class TimeSpaceSudokuModel(nn.Module):
         new_cache_list.append(new_cache_backbone_list)
 
         # 策略
-        action_logits, cache_list1 = self.actorhead(
+        action_logits, new_sub_cache_list = self.actorhead(
                                                 x_backbone,
                                                 self.grid_size,
                                                 self.grid_size,
                                                 self.rotary_emb,
                                                 cache_policy_list,
                                                 )
-        new_cache_list.append(cache_list1)
+        new_cache_list.append(new_sub_cache_list)
         # action B, S, L, D -> B, S, L, grid_size
         action_logits = self.actorhead_output(action_logits)
         # action B, S, grid_size ** 3
@@ -187,14 +124,14 @@ class TimeSpaceSudokuModel(nn.Module):
         # 这一步先降维
         value_input = self.critichead_begin(x_backbone)
 
-        value, cache_list1 = self.critichead_timespace(
+        value, new_sub_cache_list = self.critichead_timespace(
                                                 value_input,
                                                 self.grid_size,
                                                 self.grid_size,
                                                 self.rotary_emb,
                                                 cache_value_list,
                                                 )
-        new_cache_list.append(cache_list1)
+        new_cache_list.append(new_sub_cache_list)
 
         value = self.critichead_space(value,
                                       self.grid_size,
