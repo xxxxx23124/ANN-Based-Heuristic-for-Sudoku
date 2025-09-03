@@ -14,13 +14,13 @@ if __name__ == "__main__":
     GRID_SIZE = 9
 
     # 训练超参数
-    DIFFICULTY = 0.5
+    DIFFICULTY = 0.2
     MAX_EPISODE_STEPS = 120
     TOTAL_TIMESTEPS = 1_000_000_000_000
-    TRAJECTORIES_PER_UPDATE = 1000  # 每次更新收集1000条轨迹
-    EPOCHS_PER_UPDATE = 4  # 在每批数据上训练4个周期
+    TRAJECTORIES_PER_UPDATE = 100  # 每次更新收集n条轨迹
+    EPOCHS_PER_UPDATE = 4  # 在每批数据上训练n个周期
     LEARNING_RATE = 1e-5
-    CHUNK_SIZE_TUPLE = (64, 32, 16, 8, 4, 1)  # 每次处理16个时间步的数据
+    CHUNK_SIZE_TUPLE = (64, 32, 16, 8, 4, 1)  # 每次处理n个时间步的数据
 
     # --- 创建环境和智能体 ---
     game_collector = GameCollector(difficulty=DIFFICULTY, concentration=20)
