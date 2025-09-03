@@ -293,7 +293,7 @@ def test():
                 elif remaining_len >= 4:
                     chunk_size = 4
                 else:
-                    chunk_size = 1  # 如果连8都不到，就使用1来处理剩余部分
+                    chunk_size = 1  # 如果连4都不到，就使用1来处理剩余部分
 
                 # 获取当前块的数据
                 chunk_input = full_input_tensor[:, processed_len: processed_len + chunk_size]
