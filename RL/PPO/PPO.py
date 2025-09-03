@@ -238,6 +238,8 @@ class PPO:
                         start = processed_len
                         end = start + chunk_size
 
+                        processed_len += chunk_size
+
                         # 准备数据块
                         # np(S, H, W) -> np(chunk_size, H, W)
                         obs_chunk = obs_np[start:end]
