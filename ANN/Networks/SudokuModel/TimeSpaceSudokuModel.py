@@ -348,5 +348,97 @@ def test():
     print_model_summary(model, "TimeSpaceChessModel")
 
 
+def test2():
+    """
+    比较：
+      1) 连续 64 次、每次 chunk_size = 1 推理得到的输出
+      2) 连续 2 次、每次 chunk_size = 32 推理得到的输出
+    二者是否基本一致（误差仅来自浮点舍入）。
+    """
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    H, W = 9, 9
+    BATCH_SIZE = 1
+    SEQ_LEN = 64
+    INPUT_CHANNELS = 10
+
+    # ---------------- 初始化模型 ----------------
+    config = SudokuModelConfig(grid_size=H, input_channels=INPUT_CHANNELS)
+    model = TimeSpaceSudokuModel(config, device).to(device)
+    model.eval()                     # 评估模式，关闭 dropout 等随机性
+    torch.manual_seed(42)            # 为可复现性固定随机种子（可选）
+
+    # ---------------- 构造同一段输入 ----------------
+    # 形状: (B, S, H, W, C)
+    input_tensor = torch.randn(BATCH_SIZE, SEQ_LEN, H, W, INPUT_CHANNELS, device=device)
+
+    # =========================================================================
+    # 方案 A：chunk_size = 1 ，连续喂 64 次
+    # =========================================================================
+    with torch.no_grad():
+        cache_a = None
+        policy_out_a = []
+        value_out_a = []
+
+        for t in range(SEQ_LEN):
+            chunk = input_tensor[:, t : t + 1]          # (B, 1, H, W, C)
+            policy_pred, value_pred, cache_a = model(chunk, cache_a)
+            policy_out_a.append(policy_pred)            # 维度: (B, 1, 729)
+            value_out_a.append(value_pred)              # 维度: (B, 1, 1)
+
+        # 拼接回 (B, S, ..) 维度
+        policy_out_a = torch.cat(policy_out_a, dim=1)   # (B, 64, 729)
+        value_out_a  = torch.cat(value_out_a,  dim=1)   # (B, 64, 1)
+
+    # =========================================================================
+    # 方案 B：chunk_size = 32 ，连续喂 2 次
+    # =========================================================================
+    with torch.no_grad():
+        cache_b = None
+        policy_out_b = []
+        value_out_b = []
+
+        for start in range(0, SEQ_LEN, 32):
+            chunk = input_tensor[:, start : start + 32]  # (B, 32, H, W, C)
+            policy_pred, value_pred, cache_b = model(chunk, cache_b)
+            policy_out_b.append(policy_pred)             # (B, 32, 729)
+            value_out_b.append(value_pred)               # (B, 32, 1)
+
+        policy_out_b = torch.cat(policy_out_b, dim=1)    # (B, 64, 729)
+        value_out_b  = torch.cat(value_out_b,  dim=1)    # (B, 64, 1)
+
+    # ---------------- 误差评估 ----------------
+    def tensor_stats(t):
+        return dict(min=float(t.min()), max=float(t.max()), mean=float(t.mean()))
+
+    # 策略输出
+    diff_policy = policy_out_a - policy_out_b
+    max_abs_policy = diff_policy.abs().max().item()
+    mse_policy = torch.mean(diff_policy ** 2).item()
+
+    # 价值输出
+    diff_value = value_out_a - value_out_b
+    max_abs_value = diff_value.abs().max().item()
+    mse_value = torch.mean(diff_value ** 2).item()
+
+    print("\n======= Test2: Consistency Check =======")
+    print(f"Policy  output   ‖ max|Δ| = {max_abs_policy:.6e},  MSE = {mse_policy:.6e}")
+    print(f"Value   output   ‖ max|Δ| = {max_abs_value:.6e},  MSE = {mse_value:.6e}")
+
+    # （可选）给出一个是否通过的结论
+    tol = 1e-5
+    if max_abs_policy < tol and max_abs_value < tol:
+        print("✓ Outputs are consistent within tolerance.")
+    else:
+        print("✗ Outputs differ more than tolerance!")
+
+    # 也可打印部分统计信息，便于排查
+    # print("Policy A stats:", tensor_stats(policy_out_a))
+    # print("Policy B stats:", tensor_stats(policy_out_b))
+    # print("Value  A stats:", tensor_stats(value_out_a))
+    # print("Value  B stats:", tensor_stats(value_out_b))
+    print("========================================\n")
+
+
 if __name__ == '__main__':
     test()
+    test2()

@@ -26,6 +26,7 @@ class PPO:
                  clip_coef: float = 0.2,
                  ent_coef: float = 0.01,
                  vf_coef: float = 0.5,
+                 target_kl: float = 0.005,
                  chunk_size_tuple: tuple[int, ...] = (64, 32, 16, 8, 4, 1),
                  device: torch.device = torch.device('cuda')):
         """
@@ -41,6 +42,7 @@ class PPO:
             clip_coef (float): PPO 裁剪范围的系数。
             ent_coef (float): 熵奖励的系数，鼓励探索。
             vf_coef (float): 价值函数损失的系数。
+            target_kl (float): approx_kl的阈值，如果超过，就跳出循环。
             chunk_size_list tuple: 处理序列数据时的分块大小，降序。
             device (torch.device): 计算设备。
         """
@@ -55,6 +57,7 @@ class PPO:
         self.clip_coef = clip_coef
         self.ent_coef = ent_coef
         self.vf_coef = vf_coef
+        self.target_kl = target_kl
         self.chunk_size_tuple = chunk_size_tuple
 
         self.optimizer = torch.optim.Adam(self.agent.actor_critic.parameters(), lr=lr)
@@ -198,32 +201,52 @@ class PPO:
             global_step += rollout_timesteps
             print(f"Collected {rollout_timesteps} timesteps. Total timesteps: {global_step}/{total_timesteps}")
 
-            # --- 对每条轨迹进行学习 ---
-            self.agent.actor_critic.train()  # 切换到训练模式
+            # --- 多 Epoch 训练 ---
+            for epoch in range(self.epochs):
 
-            for traj_idx, trajectory in enumerate(batch_trajectories):
-                print(
-                    f"  Training on trajectory {traj_idx + 1}/{len(batch_trajectories)} (length: {len(trajectory['rewards'])})")
+                # --- 对每条轨迹进行学习 ---
 
-                # 计算 GAE 和回报
-                advantages, returns = self._compute_advantages_and_returns(trajectory)
-                # 标准化优势 (可选但推荐)
-                advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+                # 切换到训练模式
+                self.agent.actor_critic.train()
 
-                obs_np = np.array(trajectory["obs"])
-                initial_boards_np = np.array(trajectory["initial_boards"])
-                old_actions = trajectory["actions"].to(self.device)
-                old_log_probs = trajectory["log_probs"].to(self.device)
-                legal_masks = trajectory["legal_masks"].to(self.device)
+                # 跨 trajectory 累积梯度，但在同一个 epoch 内更新一次
+                # 清空可能未被清空的梯度
+                self.optimizer.zero_grad()
 
-                trajectory_len = len(obs_np)
+                # 用来累加所有轨迹的损失
+                total_loss = torch.zeros(1, device=self.device)
 
-                # --- 多 Epoch 训练 ---
-                for epoch in range(self.epochs):
+                break_epoch_loop = False
+
+                for traj_idx, trajectory in enumerate(batch_trajectories):
+                    print(
+                        f"  Training on trajectory {traj_idx + 1}/{len(batch_trajectories)} (length: {len(trajectory['rewards'])})")
+
+                    # 计算 GAE 和回报
+                    advantages, returns = self._compute_advantages_and_returns(trajectory)
+                    # 标准化优势 (可选但推荐)
+                    advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+
+                    obs_np = np.array(trajectory["obs"])
+                    initial_boards_np = np.array(trajectory["initial_boards"])
+                    old_actions = trajectory["actions"].to(self.device)
+                    old_log_probs = trajectory["log_probs"].to(self.device)
+                    legal_masks = trajectory["legal_masks"].to(self.device)
+
+                    trajectory_len = len(obs_np)
+                    # 用来累加轨迹中所有子块的损失
+                    trajectory_loss = torch.zeros(1, device=self.device)
+
+                    # trajectory_weight：让一条 trajectory 内所有 chunk 的权重和为 1，
+                    # 从而得到“按时间步均匀平均”的 loss。
+                    trajectory_weight = 0.0
+
                     # --- 分块处理 (Chunking) ---
                     # 遍历序列数据块
                     processed_len = 0
                     inference_cache:Mamba2InferenceCache | None = None
+
+                    new_log_probs = []
 
                     while processed_len < trajectory_len:
                         remaining_len = trajectory_len - processed_len
@@ -253,12 +276,15 @@ class PPO:
 
                         # 计算新 log_probs, 熵, 和价值
                         dist = self._get_masked_distribution(action_logits.squeeze(0), legal_masks[start:end])
-                        new_log_probs = dist.log_prob(old_actions[start:end])
+                        sub_new_log_probs = dist.log_prob(old_actions[start:end])
                         entropy = dist.entropy()
+
+                        # 积累log_probs
+                        new_log_probs.append(sub_new_log_probs)
 
                         # 计算损失
                         # 策略损失 (Policy Loss)
-                        ratio = torch.exp(new_log_probs - old_log_probs[start:end])
+                        ratio = torch.exp(sub_new_log_probs - old_log_probs[start:end])
                         # 与 pg_loss1 = advantages[start:end] * ratio
                         # pg_loss2 = advantages[start:end] * torch.clamp(ratio, 1 - self.clip_coef, 1 + self.clip_coef)
                         # pg_loss = (-torch.min(pg_loss1, pg_loss2)).mean() 等效
@@ -272,24 +298,50 @@ class PPO:
                         # 熵损失 (Entropy Loss)
                         entropy_loss = entropy.mean()
 
-                        # 总损失
-                        loss = pg_loss - self.ent_coef * entropy_loss + self.vf_coef * v_loss
+                        # 子损失 loss_chunk
+                        loss_chunk = pg_loss - self.ent_coef * entropy_loss + self.vf_coef * v_loss
 
-                        # 反向传播，累积梯度
-                        # 梯度会按比例缩放，以正确处理不同轨迹的贡献
-                        (loss / trajectories_per_update).backward()
+                        w = chunk_size  # 每个时间步权重 = 1
+                        trajectory_loss = trajectory_loss + loss_chunk * w
+                        trajectory_weight = trajectory_weight + w
 
-            # --- 执行参数更新 ---
-            # 使用累积的梯度更新网络参数
-            nn.utils.clip_grad_norm_(self.agent.actor_critic.parameters(), 0.5)  # 梯度裁剪
-            self.optimizer.step()
+                    # 总损失
+                    total_loss = total_loss + trajectory_loss/trajectory_weight
 
-            self.agent.actor_critic.eval()  # 切换回评估模式
+                    # list -> tensor
+                    new_log_probs = torch.cat(new_log_probs, dim=0)
 
-            update_duration = time.time() - update_start_time
-            print(
-                f"Update finished in {update_duration:.2f}s. Avg reward: {np.mean([t['rewards'].sum().item() for t in batch_trajectories]):.2f}")
-            print("-" * 25)
+                    # 这条轨迹的 Approximating KL Divergence
+                    logratios = new_log_probs - old_log_probs
+                    ratios = torch.exp(logratios)
+                    approx_kl = ((ratios - 1) - logratios).mean()
+
+                    print(
+                        f"  Training on trajectory {traj_idx + 1}/{len(batch_trajectories)} (approx kl: {approx_kl:>16})")
+
+                    if approx_kl > self.target_kl:
+                        break_epoch_loop = True
+                        break
+
+                # --- 执行参数更新 ---
+                if not break_epoch_loop:
+                    # 反向传播，累积梯度
+                    # 梯度会按比例缩放，以正确处理不同轨迹的贡献
+                    avg_loss = total_loss / trajectories_per_update
+                    avg_loss.backward()
+                    # 使用累积的梯度更新网络参数
+                    nn.utils.clip_grad_norm_(self.agent.actor_critic.parameters(), 0.5)  # 梯度裁剪
+                    self.optimizer.step()
+
+                self.agent.actor_critic.eval()  # 切换回评估模式
+
+                update_duration = time.time() - update_start_time
+                print(
+                    f"Update finished in {update_duration:.2f}s. Avg reward: {np.mean([t['rewards'].sum().item() for t in batch_trajectories]):.2f}")
+                print("-" * 25)
+
+                if break_epoch_loop:
+                    break
 
     def _preprocess_batch(self, obs_chunk: np.ndarray, initial_boards_batch: np.ndarray) -> torch.Tensor:
         """为一批观测数据（一个块）进行预处理。"""

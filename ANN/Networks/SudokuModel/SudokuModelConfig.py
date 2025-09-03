@@ -9,7 +9,7 @@ class SudokuModelConfig:
     input_channels: int
 
     # 嵌入层配置
-    embed_dim: int = 768
+    embed_dim: int = 512
 
     # 主干网络配置
     backbone_depth: int = 16
@@ -18,7 +18,7 @@ class SudokuModelConfig:
     actor_depth: int = 16
 
     # 价值头配置
-    critic_embed_dim: int = 256
+    critic_embed_dim: int = 128
     critic_timespace_depth: int = 1
     critic_space_depth: int = 4
 

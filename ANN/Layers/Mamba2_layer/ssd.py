@@ -58,7 +58,7 @@ def ssd(x: Tensor,
         A: Tensor, 
         B: Tensor,
         C: Tensor, 
-        chunk_size: int | None = 16,
+        chunk_size: int = 16,
         initial_ssm_states: Tensor | None = None,
         ) -> tuple[Tensor, Tensor]:
     # 并行计算diagonal block
