@@ -12,15 +12,15 @@ class SudokuModelConfig:
     embed_dim: int = 512
 
     # 主干网络配置
-    backbone_depth: int = 16
+    backbone_depth: int = 1
 
     # 策略头配置
-    actor_depth: int = 16
+    actor_depth: int = 1
 
     # 价值头配置
     critic_embed_dim: int = 128
     critic_timespace_depth: int = 1
-    critic_space_depth: int = 4
+    critic_space_depth: int = 1
 
     d_model: int = field(init=False)
     max_seq_len: int = field(init=False)

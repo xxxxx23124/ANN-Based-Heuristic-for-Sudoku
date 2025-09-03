@@ -49,8 +49,7 @@ class Mamba2_block(nn.Module):
 
     def forward(self, u: Tensor, h: Mamba2InferenceCache | None = None) -> tuple[Tensor, Mamba2InferenceCache]:
         B, S, L, D = u.shape
-        original_shape = (B, S, L, D)
-        u_reshaped = u.reshape(B * L, S, D)
+        u_reshaped = rearrange(u, 'b s l d -> (b l) s d')
         u_norm = self.pre_norm(u_reshaped)
         if h is None:
             # 如果h是None 就创建一个新的缓存
@@ -62,13 +61,15 @@ class Mamba2_block(nn.Module):
         if S == 1:
             # 循环模式（单步推理）
             y, h = self._step(u_norm, h)
-            return (u_reshaped + y).view(original_shape), h
+            output = rearrange(u_reshaped + y, '(b l) s d -> b s l d', b=B)
+            return output, h
         else:
             # 并行模式（训练或批量推理）
             # 检查一下x的序列长度，期望的是8 16 32 64 128 这种的，不期望 15这种的
             assert S % 2 == 0 and S // 2 > 1
             y, h = self._parallel_forward(u_norm, h)
-            return (u_reshaped + y).view(original_shape), h
+            output = rearrange(u_reshaped + y, '(b l) s d -> b s l d', b=B)
+            return output, h
 
     def _parallel_forward(self, u: Tensor, h: Mamba2InferenceCache) -> tuple[Tensor, Mamba2InferenceCache]:
         """并行模式下的前向传播，处理整个序列。"""
@@ -231,7 +232,7 @@ def test_mamba2_block_consistency(
     block = Mamba2_block(cfg, device=device).to(device=device, dtype=dtype)
 
     # 随机输入：形状 (B, S, L, D) , 这里 L 固定为 1，S=seq_len
-    x = torch.randn(batch_size, seq_len, 1, d_model, dtype=dtype, device=device)
+    x = torch.randn(batch_size, seq_len, 4, d_model, dtype=dtype, device=device)
 
     # -------------------------------------------------------------------------
     # 1. 并行模式

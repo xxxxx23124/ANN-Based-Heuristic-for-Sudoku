@@ -62,8 +62,7 @@ class SpatialFusion_block(nn.Module):
 
     def forward(self, x: Tensor, H: int, W: int, rotary_emb: RotaryEmbedding | None = None) -> Tensor:
         B, S, L, D = x.shape
-        original_shape = (B, S, L, D)
-        x_reshaped = x.reshape(B * S, L, D)
+        x_reshaped = rearrange(x, 'b s l d -> (b s) l d')
 
         # --- 第一个残差连接 ---
         residual = x_reshaped
@@ -88,5 +87,5 @@ class SpatialFusion_block(nn.Module):
         residual = fused_out
         mlp_out = self.mlp(self.mlp_norm(fused_out))
         final_out = residual + mlp_out
-        
-        return final_out.view(original_shape)
+        final_out_reshaped = rearrange(final_out, '(b s) l d -> b s l d', b=B)
+        return final_out_reshaped

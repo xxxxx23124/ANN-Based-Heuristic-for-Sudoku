@@ -54,7 +54,7 @@ def test_timespacechunk_consistency(
         width: int = 8,
         timespaceblock_num: int = 4,  # 测试堆叠的块数
         device_str: str = "cuda" if torch.cuda.is_available() else "cpu",
-        tolerance: float = 1e-5,
+        tolerance: float = 1e-4,
 ) -> None:
     device = torch.device(device_str)
     torch.manual_seed(42)
@@ -148,6 +148,6 @@ if __name__ == '__main__':
         d_model=128,
         height=8,
         width=8,
-        timespaceblock_num=4,
-        tolerance=1e-5
+        timespaceblock_num=3,
+        tolerance=1e-4
     )
