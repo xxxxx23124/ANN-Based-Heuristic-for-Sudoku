@@ -3,8 +3,9 @@
 import torch
 import torch.nn.functional as F
 import numpy as np
-from ANN.Networks.TimeSpaceSudokuModel import TimeSpaceSudokuModel
+from ANN.Networks.SudokuModel.TimeSpaceSudokuModel import TimeSpaceSudokuModel
 from ANN.Layers.Mamba2_layer.InferenceCache import Mamba2InferenceCache
+from ANN.Networks.SudokuModel.SudokuModelConfig import SudokuModelConfig
 
 
 class SudokuAgent:
@@ -22,9 +23,11 @@ class SudokuAgent:
         """
         self.grid_size = grid_size
         self.device = device
+        self.model_config = SudokuModelConfig(grid_size=9,
+                                              input_channels=10)
 
         # 初始化 Actor-Critic 模型
-        self.actor_critic = TimeSpaceSudokuModel(grid_size=grid_size, device=device)
+        self.actor_critic = TimeSpaceSudokuModel(self.model_config, device=device)
         self.actor_critic.to(device)
         self.actor_critic.eval()  # 默认设置为评估模式，在训练时再切换
 

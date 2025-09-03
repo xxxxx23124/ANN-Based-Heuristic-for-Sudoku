@@ -15,6 +15,7 @@ class TimeSpaceChunk(nn.Module):
         self.device = device
 
         # TimeSpaceBlocks
+        assert self.args.timespaceblock_num > 0
         if self.args.timespaceblock_num > 0:
             self.timespace_blocks = nn.ModuleList(
                 [TimeSpaceBlock(args.block_args, device) for _ in range(args.timespaceblock_num)]

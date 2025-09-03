@@ -1,0 +1,57 @@
+from dataclasses import dataclass, field
+from ANN.Networks.NetworkConfig import NetworkConfig
+from ANN.Layers.FeedForward_layer.FeedForwardConfig import FeedForwardConfig
+
+
+@dataclass
+class SudokuModelConfig:
+    grid_size: int
+    input_channels: int
+
+    # 嵌入层配置
+    embed_dim: int = 768
+
+    # 主干网络配置
+    backbone_depth: int = 16
+
+    # 策略头配置
+    actor_depth: int = 16
+
+    # 价值头配置
+    critic_embed_dim: int = 256
+    critic_timespace_depth: int = 1
+    critic_space_depth: int = 4
+
+    d_model: int = field(init=False)
+    max_seq_len: int = field(init=False)
+
+    def __post_init__(self):
+        """根据基础配置计算衍生配置"""
+        self.d_model = self.embed_dim
+        self.max_seq_len = (self.grid_size ** 2) * 2
+
+        # 主干配置
+        self.backbone_args = NetworkConfig(
+            d_model=self.d_model,
+            max_seq_len=self.max_seq_len,
+            timespaceblock_num=self.backbone_depth,
+        )
+        # 动作头的配置
+        self.actor_args = NetworkConfig(
+            d_model=self.d_model,
+            max_seq_len=self.max_seq_len,
+            timespaceblock_num=self.actor_depth,
+        )
+
+        # 价值头的配置
+        self.critic_args = NetworkConfig(
+            d_model=self.critic_embed_dim,
+            max_seq_len=self.max_seq_len,
+            timespaceblock_num=self.critic_timespace_depth,
+            spatialfusion_block_num=self.critic_space_depth,
+        )
+
+        self.critic_projection_args = FeedForwardConfig(
+            d_model=self.d_model,
+            d_model_out=self.critic_embed_dim
+        )

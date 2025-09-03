@@ -3,145 +3,176 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 from einops import rearrange
-from torch.utils.checkpoint import checkpoint
 from ANN.Layers.Mamba2_layer.InferenceCache import Mamba2InferenceCache
 from ANN.Networks.NetworkConfig import NetworkConfig
 from ANN.Layers.Norm_layer.RMSNorm import RMSNorm
-from ANN.Blocks.SpatialFusion_block import SpatialFusion_block
 from ANN.Layers.FeedForward_layer.SwiGLUMlp import SwiGLUFeedForward
 from ANN.Layers.Transformer_layer.RotaryEmbedding import RotaryEmbedding
 from ANN.Layers.FeedForward_layer.FeedForwardConfig import FeedForwardConfig
 
 from ANN.Networks.TimeSpaceChunk import TimeSpaceChunk
 from ANN.Networks.SpaceChunk import SpaceChunk
+from ANN.Networks.SudokuModel.SudokuModelConfig import SudokuModelConfig
 
 
-class TimeSpaceSudokuModel(nn.Module):
-    def __init__(self,
-                 grid_size: int,
-                 device: torch.device):
+class SudokuInputEncoder(nn.Module):
+    """负责将 (B, S, H, W, C) 的输入编码为 (B, S, L, D) 的特征"""
+
+    def __init__(self, input_channels: int, embed_dim: int, device: torch.device):
         super().__init__()
-        # 为了方便直接在这里配置超参数了
-        self.d_model = 768
-
-        self.grid_size = grid_size
-
-        # 卷积升维
         self.conv = nn.Conv2d(
-            10,
-            self.d_model,
-            3,
-            1,
-            'same',
+            input_channels,
+            embed_dim,
+            kernel_size=3,
+            stride=1,
+            padding='same',
             device=device
         )
 
-        # 配置主干网络
-        self.backbone_args = NetworkConfig(self.d_model,
-                                           (grid_size * grid_size) * 2,
-                                           timespaceblock_num=16,
-                                           )
-        self.backbone = TimeSpaceChunk(self.backbone_args, device=device)
-
-        self.value_d_model = 256
-        # 配置策略网络
-        self.actorhead_args = NetworkConfig(self.d_model,
-                                            (grid_size * grid_size) * 2,
-                                            timespaceblock_num=16,
-                                            )
-        self.actorhead = TimeSpaceChunk(self.actorhead_args, device=device)
-        self.actorhead_output = nn.Linear(self.d_model, grid_size, device=device)
-        
-        # 配置价值网络
-        self.critic_args = NetworkConfig(self.value_d_model,
-                                         (grid_size * grid_size) * 2,
-                                         spatialfusion_block_num=4,
-                                         timespaceblock_num=1
-                                         )
-        self.critichead_begin_args = FeedForwardConfig(d_model=self.d_model,
-                                                       d_model_out=self.value_d_model)
-        self.critichead_begin = nn.Sequential(
-            RMSNorm(self.d_model, device=device),
-            SwiGLUFeedForward(self.critichead_begin_args, device=device),
-        )
-        
-        
-        self.critichead_timespace = TimeSpaceChunk(self.critic_args, device=device)
-        self.critichead_space = SpaceChunk(self.critic_args, device=device)
-        self.critichead_output = nn.Linear(self.value_d_model, 1, device=device)
-
-        
-        # 配置rotary_emb，rotary_emb是根据headdim来的，headdim在Transformer的配置文件中写死为64了
-        self.rotary_emb = RotaryEmbedding(self.backbone_args.block_args.transformer_args, device=device)
-
-
-    def forward(        
-            self,
-            x:Tensor,
-            cache_list: list[list[Mamba2InferenceCache]] | None=None,
-            ) -> tuple[Tensor, Tensor, list[list[Mamba2InferenceCache]]]:
+    def forward(self, x: Tensor) -> Tensor:
+        # x: (B, S, H, W, C)
         B, S, H, W, C = x.shape
-        if cache_list is not None:
-            cache_backbone_list = cache_list[0]
-            cache_policy_list = cache_list[1]
-            cache_value_list = cache_list[2]
-        else:
-            cache_backbone_list = None
-            cache_policy_list = None
-            cache_value_list = None
-
-        # 这里的输入形状为: x(B, S, H, W, C)
         x = rearrange(x, "b s h w c -> (b s) c h w")
         x = F.gelu(self.conv(x))
         x = rearrange(x, "(b s) d h w -> b s (h w) d", s=S)
-        # x形状转变为：B, S, L, D
-        new_cache_list = []
-        # 主干
-        x_backbone, new_cache_backbone_list = self.backbone(
-                                                x,
-                                                self.grid_size,
-                                                self.grid_size,
-                                                self.rotary_emb,
-                                                cache_backbone_list,
-                                                )
-        new_cache_list.append(new_cache_backbone_list)
+        # return: (B, S, L, D)
+        return x
 
-        # 策略
-        action_logits, new_sub_cache_list = self.actorhead(
-                                                x_backbone,
-                                                self.grid_size,
-                                                self.grid_size,
-                                                self.rotary_emb,
-                                                cache_policy_list,
-                                                )
-        new_cache_list.append(new_sub_cache_list)
-        # action B, S, L, D -> B, S, L, grid_size
-        action_logits = self.actorhead_output(action_logits)
-        # action B, S, grid_size ** 3
+
+class ActorHead(nn.Module):
+    """策略头：TimeSpace -> 输出 -> Reshape"""
+
+    def __init__(self, config: NetworkConfig, grid_size: int, device: torch.device):
+        super().__init__()
+        self.timespace_chunk = TimeSpaceChunk(config, device=device)
+        self.output_head = nn.Linear(config.d_model, grid_size, device=device)
+
+    def forward(
+            self,
+            x: Tensor,
+            H: int,
+            W: int,
+            rotary_emb: RotaryEmbedding,
+            cache_list: list[Mamba2InferenceCache] | None = None
+    ) -> tuple[Tensor, list[Mamba2InferenceCache]]:
+        action_logits, new_cache_list = self.timespace_chunk(
+            x, H, W, rotary_emb, cache_list
+        )
+
+        # B, S, L, D -> B, S, L, grid_size
+        action_logits = self.output_head(action_logits)
+        # B, S, L, grid_size -> B, S, (L * grid_size)
         action_logits = rearrange(action_logits, "b s l d -> b s (l d)")
 
-        # 价值
-        # 这一步先降维
-        value_input = self.critichead_begin(x_backbone)
+        return action_logits, new_cache_list
 
-        value, new_sub_cache_list = self.critichead_timespace(
-                                                value_input,
-                                                self.grid_size,
-                                                self.grid_size,
-                                                self.rotary_emb,
-                                                cache_value_list,
-                                                )
-        new_cache_list.append(new_sub_cache_list)
 
-        value = self.critichead_space(value,
-                                      self.grid_size,
-                                      self.grid_size,
-                                      self.rotary_emb,
-                                      )
+class CriticHead(nn.Module):
+    """价值头：降维 -> TimeSpace -> SpaceFusion -> 输出"""
+
+    def __init__(self, config: NetworkConfig, projection_config: FeedForwardConfig, device: torch.device):
+        super().__init__()
+        self.config = config
+
+        # 初始降维投影
+        self.projection = nn.Sequential(
+            RMSNorm(projection_config.d_model, device=device),
+            SwiGLUFeedForward(projection_config, device=device),
+        )
+
+        # 时空处理块
+        self.timespace_chunk = TimeSpaceChunk(config, device=device)
+
+        # 空间融合块
+        self.space_chunk = SpaceChunk(config, device=device)
+
+        # 输出层
+        self.output_head = nn.Linear(config.d_model, 1, device=device)
+
+    def forward(
+            self,
+            x: Tensor,
+            H: int, W: int,
+            rotary_emb: RotaryEmbedding,
+            cache_list: list[Mamba2InferenceCache] | None = None
+    ) -> tuple[Tensor, list[Mamba2InferenceCache]]:
+        # 降维
+        x_projected = self.projection(x)
+
+        # 时空处理
+        value, new_cache_list = self.timespace_chunk(
+            x_projected, H, W, rotary_emb, cache_list
+        )
+
+        # 空间融合
+        value = self.space_chunk(value, H, W, rotary_emb)
+
+        # 聚合与输出
         # B, S, L, D_low -> B, S, L
-        value = self.critichead_output(value).squeeze(-1)
+        value = self.output_head(value).squeeze(-1)
         # B, S, L -> B, S, 1
         value = torch.mean(value, dim=-1, keepdim=True)
+
+        return value, new_cache_list
+
+
+# 假设上面的 SudokuModelConfig 和重构后的模块都已定义
+
+class TimeSpaceSudokuModel(nn.Module):
+    def __init__(self, config: SudokuModelConfig, device: torch.device):
+        super().__init__()
+        self.config = config
+        self.device = device
+
+        # 输入编码器
+        self.encoder = SudokuInputEncoder(config.input_channels, config.embed_dim, device)
+
+        # 核心主干网络
+        self.backbone = TimeSpaceChunk(config.backbone_args, device)
+
+        # 策略头
+        self.actor_head = ActorHead(config.actor_args, config.grid_size, device)
+
+        # 价值头
+        self.critic_head = CriticHead(config.critic_args, config.critic_projection_args, device)
+
+        # 共享的旋转位置编码 (headdim 从 block 配置中获取)
+        # 假设所有Transformer共享相同的headdim
+        # 配置rotary_emb，rotary_emb是根据headdim来的，headdim在Transformer的配置文件中写死为64了
+        self.rotary_emb = RotaryEmbedding(self.config.backbone_args.block_args.transformer_args, device=device)
+
+    def forward(
+            self,
+            x: Tensor,
+            cache_list: list[list[Mamba2InferenceCache]] | None = None,
+    ) -> tuple[Tensor, Tensor, list[list[Mamba2InferenceCache]]]:
+        B, S, H, W, C = x.shape
+
+        # 分离缓存
+        cache_backbone, cache_actor, cache_critic = None, None, None
+        if cache_list is not None:
+            cache_backbone, cache_actor, cache_critic = cache_list[0], cache_list[1], cache_list[2]
+
+        # 编码输入
+        x_embed = self.encoder(x)  # (B, S, L, D)
+
+        # 通过主干网络
+        x_backbone, new_cache_backbone = self.backbone(
+            x_embed, H, W, self.rotary_emb, cache_backbone
+        )
+
+        # 通过策略头
+        action_logits, new_cache_actor = self.actor_head(
+            x_backbone, H, W, self.rotary_emb, cache_actor
+        )
+
+        # 通过价值头
+        value, new_cache_critic = self.critic_head(
+            x_backbone, H, W, self.rotary_emb, cache_critic
+        )
+
+        # 组合新的缓存
+        new_cache_list = [new_cache_backbone, new_cache_actor, new_cache_critic]
 
         return action_logits, value, new_cache_list
 
@@ -209,7 +240,9 @@ def test():
 
         # 1. 初始化模型
         try:
-            model = TimeSpaceSudokuModel(H, device)
+            config = SudokuModelConfig(grid_size=H,
+                              input_channels=INPUT_CHANNELS)
+            model = TimeSpaceSudokuModel(config, device)
             model.to(device)
             print("Model initialized successfully.")
         except Exception as e:
