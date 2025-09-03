@@ -17,4 +17,4 @@
 
 ## 当前状态
 
-**开发中**。解决TimeSpaceBlock模块发生的时间空间污染问题，mamba2模块测试后应该没问题，SpatialFusion_block是无状态的。但是TimeSpaceBlock堆叠后，在并行和独步处理时会发生污染。这个问题有点棘手，暂时解决不了。
+**开发中**。解决TimeSpaceBlock模块发生的时间空间污染问题。问题确定在mamba2模块中L维度的问题，L等于1时，没问题，L大于1时，出问题。
