@@ -48,7 +48,7 @@ class TimeSpaceChunk(nn.Module):
 
 def test_timespacechunk_consistency(
         batch_size: int = 2,
-        seq_len: int = 64,  # 必须是偶数且 > 2
+        seq_len: int = 16,  # 必须是偶数且 > 2
         d_model: int = 128,
         height: int = 8,
         width: int = 8,
@@ -65,7 +65,7 @@ def test_timespacechunk_consistency(
 
     net_cfg = NetworkConfig(
         d_model=d_model,
-        max_seq_len=seq_len,
+        max_seq_len=height * width,
         timespaceblock_num=timespaceblock_num
     )
     model = TimeSpaceChunk(net_cfg, device).to(device).eval()  # 切换到评估模式
@@ -97,7 +97,7 @@ def test_timespacechunk_consistency(
     # =========================================================================
     # 方案 B：分块模式 (chunk_size = 32，连续喂 2 次)
     # =========================================================================
-    chunk_size_b = 32
+    chunk_size_b = 4
     num_chunks_b = seq_len // chunk_size_b
     print(f"Running scenario B: {num_chunks_b} steps of chunk_size={chunk_size_b}...")
     with torch.no_grad():
@@ -141,13 +141,4 @@ def test_timespacechunk_consistency(
 
 
 if __name__ == '__main__':
-
-    test_timespacechunk_consistency(
-        batch_size=2,
-        seq_len=64,
-        d_model=128,
-        height=8,
-        width=8,
-        timespaceblock_num=3,
-        tolerance=1e-4
-    )
+    test_timespacechunk_consistency()

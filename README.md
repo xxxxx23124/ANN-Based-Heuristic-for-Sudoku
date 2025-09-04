@@ -8,7 +8,7 @@
 
 ## 技术方案
 
--   **方法**: 强化学习 (Reinforcement Learning)，可能采用 PPO 算法。
+-   **方法**: 强化学习 (Reinforcement Learning)。
 -   **模型**: 继承自 [RL_mamba2-selfAttention-ppo](https://github.com/xxxxx23124/RL_mamba2-selfAttention-ppo.git) 的神经网络架构，用于处理棋盘状态。
 -   **核心机制**:
     -   **Agent (模型)** 在数独**环境 (棋盘)** 中执行**动作 (填数字)**。
@@ -17,4 +17,5 @@
 
 ## 当前状态
 
-**暂停中**。解决TimeSpaceBlock模块发生的时间空间污染问题。问题确定在mamba2模块中L维度的问题，L等于1时，没问题，L大于1时，出问题。问题以解决，一是因为reshape操作不安全，将reshape替换为rearrange即可。二是浮点精度的固有误差，这一点我无法消除，所以这个项目搁置。
+**PPO暂停中**。PPO开发基本完成。发现：浮点精度的固有误差，这一点我无法消除，这个误差导致PPO这种同策略的算法难以进行（独步推理时和并行训练时的策略差距较大，而且策略差距随着模型增大而增大）。
+**SAC for Discrete Actions等待开发**。使用离散的SAC避开同策略的限制。
