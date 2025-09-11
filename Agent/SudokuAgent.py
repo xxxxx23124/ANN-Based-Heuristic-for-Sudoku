@@ -23,8 +23,7 @@ class SudokuAgent:
         """
         self.grid_size = grid_size
         self.device = device
-        self.model_config = SudokuModelConfig(grid_size=9,
-                                              input_channels=10)
+        self.model_config = SudokuModelConfig(grid_size=9, input_channels=10)
 
         # 初始化 Actor-Critic 模型
         self.actor_critic = TimeSpaceSudokuModel(self.model_config, device=device)

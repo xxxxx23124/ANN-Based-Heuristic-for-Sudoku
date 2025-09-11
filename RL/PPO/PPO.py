@@ -316,12 +316,11 @@ class PPO:
                     ratios = torch.exp(logratios)
                     approx_kl = ((ratios - 1) - logratios).mean()
 
-                    print(
-                        f"  Training on trajectory {traj_idx + 1}/{len(batch_trajectories)} (approx kl: {approx_kl:>16})")
-
+                    print(f"  Training on trajectory {traj_idx + 1}/{len(batch_trajectories)} (approx kl: {approx_kl:>16})")
                     if approx_kl > self.target_kl:
-                        break_epoch_loop = True
-                        break
+                        #break_epoch_loop = True
+                        #break
+                        pass
 
                 # --- 执行参数更新 ---
                 if not break_epoch_loop:
