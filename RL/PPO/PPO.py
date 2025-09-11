@@ -213,9 +213,6 @@ class PPO:
                 # 清空可能未被清空的梯度
                 self.optimizer.zero_grad()
 
-                # 用来累加所有轨迹的损失
-                total_loss = torch.zeros(1, device=self.device)
-
                 break_epoch_loop = False
 
                 for traj_idx, trajectory in enumerate(batch_trajectories):
@@ -293,7 +290,14 @@ class PPO:
                         pg_loss = torch.max(pg_loss1, pg_loss2).mean()
 
                         # 价值损失 (Value Loss)
-                        v_loss = F.mse_loss(new_values.squeeze(), returns[start:end])
+                        """
+                        当 chunk_size > 1 时：new_values 是 (1, chunk_size, 1)，.squeeze() 之后变成 (chunk_size,)。returns[start:end] 也是 (chunk_size,)。
+                        维度匹配，没有问题。
+                        当 chunk_size == 1 时：new_values 是 (1, 1, 1)，.squeeze() 会移除所有维度为1的轴，结果是一个0维的标量（scalar），其尺寸为 torch.Size([])。
+                        然而，returns[start:end] (例如 returns[5:6]) 切片操作会保留一个维度，结果是一个1维张量，其尺寸为 torch.Size([1])。
+                        """
+                        squeezed_values = new_values.squeeze(-1).squeeze(0)
+                        v_loss = F.mse_loss(squeezed_values, returns[start:end])
 
                         # 熵损失 (Entropy Loss)
                         entropy_loss = entropy.mean()
@@ -304,9 +308,6 @@ class PPO:
                         w = chunk_size  # 每个时间步权重 = 1
                         trajectory_loss = trajectory_loss + loss_chunk * w
                         trajectory_weight = trajectory_weight + w
-
-                    # 总损失
-                    total_loss = total_loss + trajectory_loss/trajectory_weight
 
                     # list -> tensor
                     new_log_probs = torch.cat(new_log_probs, dim=0)
@@ -322,14 +323,22 @@ class PPO:
                         #break
                         pass
 
+                    # 计算这条轨迹的平均损失
+                    avg_trajectory_loss = trajectory_loss / trajectory_weight
+
+                    # 对总损失进行归一化（因为我们要累积 N 条轨迹的梯度）
+                    #    相当于 (loss1 + loss2 + ... + lossN) / N
+                    #    等价于 (loss1/N).backward() + (loss2/N).backward() + ...
+                    scaled_loss = avg_trajectory_loss / trajectories_per_update
+
+                    # 立即反向传播，梯度会自动累积，避免积累庞大的计算图
+                    scaled_loss.backward()
+
                 # --- 执行参数更新 ---
                 if not break_epoch_loop:
-                    # 反向传播，累积梯度
-                    # 梯度会按比例缩放，以正确处理不同轨迹的贡献
-                    avg_loss = total_loss / trajectories_per_update
-                    avg_loss.backward()
+                    # 梯度裁剪
+                    nn.utils.clip_grad_norm_(self.agent.actor_critic.parameters(), 0.5)
                     # 使用累积的梯度更新网络参数
-                    nn.utils.clip_grad_norm_(self.agent.actor_critic.parameters(), 0.5)  # 梯度裁剪
                     self.optimizer.step()
 
                 self.agent.actor_critic.eval()  # 切换回评估模式

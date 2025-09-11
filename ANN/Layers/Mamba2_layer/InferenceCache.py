@@ -58,10 +58,10 @@ class Mamba2InferenceCache:
         
         # 2. 更新卷积状态
         self.conv_state = torch.roll(self.conv_state, shifts=-1, dims=-1)
-        self.conv_state[..., -1] = new_conv_input
+        self.conv_state[..., -1] = new_conv_input.detach()
         
         # 3. 更新 SSM 状态
-        self.ssm_state = new_ssm_state
+        self.ssm_state = new_ssm_state.detach()
 
     def update_parallel(self, new_conv_input: Tensor, new_ssm_state: Tensor) -> None:
         assert new_conv_input.shape == self.conv_state.shape
@@ -70,8 +70,8 @@ class Mamba2InferenceCache:
         target_batch_size = new_conv_input.shape[0]
         self._adapt_batch_size(target_batch_size)
 
-        self.conv_state = new_conv_input
-        self.ssm_state = new_ssm_state
+        self.conv_state = new_conv_input.detach()
+        self.ssm_state = new_ssm_state.detach()
 
     def get(self) -> tuple[Tensor, Tensor]:
         """获取当前的卷积状态和 SSM 状态。"""

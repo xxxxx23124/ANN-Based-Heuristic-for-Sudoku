@@ -5,7 +5,7 @@ from gymnasium import spaces
 import numpy as np
 
 from game_collector import GameCollector
-from sudoku.sudoku import UnsolvableSudoku
+from sudoku.sudoku import Sudoku, UnsolvableSudoku
 
 class SudokuEnv(gym.Env):
     """
@@ -101,19 +101,26 @@ class SudokuEnv(gym.Env):
             # 注意：即使是无用功，我们仍然执行它并继续后续检查，因为它可能会触发超时
 
         # 检查是否违反数独规则 (硬约束)
-        # 我们需要一个临时棋盘来检查这一步是否会造成冲突
-        temp_board = self._current_board.copy()
-        temp_board[row, col] = num  # 假设执行了动作
-        if not self._is_move_legal(row, col, num):
+        is_legal = self._is_move_legal(row, col, num)
+        if not is_legal:
             reward -= 2.0  # 核心惩罚
             info["error"] = f"Constraint violation by placing {num} at ({row}, {col})."
 
+        # 只有在动作满足基本规则（硬约束）时，才进行昂贵的 solvability 检查
+        if is_legal and self._current_board[row, col] != num:
+            # [警告] 下面的调用会极大地拖慢训练速度！
+            if self._does_move_preserve_solvability(row, col, num):
+                reward += 0.5  # 奖励有远见的好棋
+                info["shaping_reward"] = "Good move: preserves solvability."
+            else:
+                # 如果导致无解，不直接惩罚。
+                # 另一种设计是给予惩罚，例如 reward -= 1.0
+                # 因为这虽然不是立即的规则违反，但却是逻辑上的死棋。
+                # 这里我们暂时遵循“不扣分”的原则。
+                info["shaping_reward"] = "Bad move: leads to an unsolvable state."
+
         # 应用步数成本
         reward -= 0.02
-
-        # 检查是否是逻辑上确定的步骤 未实现
-        # if self._is_forced_move(row, col, num):
-        #     reward += 0.5
 
         # 应用动作到真实棋盘
         self._current_board[row, col] = num
@@ -179,6 +186,30 @@ class SudokuEnv(gym.Env):
             return False
 
         return True
+
+    def _does_move_preserve_solvability(self, row: int, col: int, num: int) -> bool:
+        """
+        [性能警告] 这是一个计算成本极高的函数！
+        它会检查在 (row, col) 填入 num 后，棋盘是否仍然有解。
+
+        返回:
+            True 如果棋盘仍然可解。
+            False 如果棋盘变得不可解。
+        """
+        # 创建一个临时棋盘副本，应用动作
+        temp_board = self._current_board.copy()
+        temp_board[row, col] = num
+
+        # 将 numpy 数组转换回 Sudoku 库所需的 list[list[int|None]] 格式
+        board_list = [[int(val) if val != 0 else None for val in r] for r in temp_board]
+
+        try:
+            # 创建一个新的 Sudoku 对象并尝试求解
+            temp_puzzle = Sudoku(self.sub_grid_size, self.sub_grid_size, board=board_list)
+            temp_puzzle.solve(assert_solvable=True)
+            return True  # 如果 solve() 成功，说明是好棋
+        except UnsolvableSudoku:
+            return False # 如果抛出异常，说明是死棋
 
     def _is_board_complete_and_valid(self, board: np.ndarray) -> bool:
         """
