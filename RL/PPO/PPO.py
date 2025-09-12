@@ -46,7 +46,7 @@ class PPO:
             vf_coef (float): 价值函数损失的系数。
             target_kl (float): approx_kl的阈值，如果超过，就跳出循环。
             kl_warmup_threshold (float): 平均 approx_kl 的 warmup 阈值，低于此值才开始启用 target_kl 截断。
-            chunk_size_list tuple: 处理序列数据时的分块大小，降序。
+            chunk_size_tuple (tuple): 处理序列数据时的分块大小，降序。
             use_mask (bool): 是否使用mask填充不合法位置
             device (torch.device): 计算设备。
         """
@@ -388,8 +388,9 @@ class PPO:
                     f"Update finished in {update_duration:.2f}s. Avg reward: {np.mean([t['rewards'].sum().item() for t in batch_trajectories]):.2f}")
                 print("-" * 25)
 
-                if break_epoch_loop:
+                if break_epoch_loop or not self.kl_break_enabled:
                     break
+
 
     def _preprocess_batch(self, obs_chunk: np.ndarray, initial_boards_batch: np.ndarray) -> torch.Tensor:
         """为一批观测数据（一个块）进行预处理。"""

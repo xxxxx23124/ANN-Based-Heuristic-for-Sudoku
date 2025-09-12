@@ -111,7 +111,7 @@ class SudokuEnv(gym.Env):
             # [警告] 下面的调用会极大地拖慢训练速度！
             if self._does_move_preserve_solvability(row, col, num):
                 # 这里设置一个微小的值是因为不希望模型陷入在两个action都可解时的反复横跳，以获取比最终奖励更多的奖励
-                reward += 0.05  # 奖励有远见的好棋
+                reward += 0.1  # 奖励有远见的好棋
                 info["shaping_reward"] = "Good move: preserves solvability."
             else:
                 # 如果导致无解，不直接惩罚。
@@ -135,13 +135,13 @@ class SudokuEnv(gym.Env):
                 reward += 10.0  # 成功解出！
                 terminated = True
             else:
-                reward -= 1.2  # 填满但错误
+                reward -= 5.0  # 填满但错误
                 terminated = True
 
         # 检查是否超时
         truncated = False
         if not terminated and self._episode_steps >= self.max_episode_steps:
-            reward -= 1.0  # 对超时给予轻微惩罚
+            reward -= 10.0
             truncated = True
 
         if self.render_mode == "human":
