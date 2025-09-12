@@ -7,16 +7,16 @@ class SudokuModelConfig:
     input_channels: int
 
     # 嵌入层配置
-    embed_dim: int = 256
+    embed_dim: int = 512
 
     # 主干网络配置
-    backbone_depth: int = 12
+    backbone_depth: int = 16
 
     # 策略头配置
-    actor_depth: int = 4
+    actor_depth: int = 8
 
     # 价值头配置
-    critic_depth: int = 4
+    critic_depth: int = 8
 
     d_model: int = field(init=False)
     max_seq_len: int = field(init=False)

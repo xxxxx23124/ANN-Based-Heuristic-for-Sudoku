@@ -26,8 +26,10 @@ class PPO:
                  clip_coef: float = 0.2,
                  ent_coef: float = 0.01,
                  vf_coef: float = 0.5,
-                 target_kl: float = 0.005,
+                 target_kl: float = 0.02,
+                 kl_warmup_threshold: float = 0.002,  # Warmup 阈值
                  chunk_size_tuple: tuple[int, ...] = (64, 32, 16, 8, 4, 1),
+                 use_mask: bool = False,
                  device: torch.device = torch.device('cuda')):
         """
         初始化 PPO 训练器。
@@ -43,7 +45,9 @@ class PPO:
             ent_coef (float): 熵奖励的系数，鼓励探索。
             vf_coef (float): 价值函数损失的系数。
             target_kl (float): approx_kl的阈值，如果超过，就跳出循环。
+            kl_warmup_threshold (float): 平均 approx_kl 的 warmup 阈值，低于此值才开始启用 target_kl 截断。
             chunk_size_list tuple: 处理序列数据时的分块大小，降序。
+            use_mask (bool): 是否使用mask填充不合法位置
             device (torch.device): 计算设备。
         """
         self.env = env
@@ -59,6 +63,13 @@ class PPO:
         self.vf_coef = vf_coef
         self.target_kl = target_kl
         self.chunk_size_tuple = chunk_size_tuple
+
+        # --- Warmup 功能相关 ---
+        self.kl_warmup_threshold = kl_warmup_threshold
+        self.kl_break_enabled = False  # 初始禁用 KL 截断功能
+
+        # --- 其他参数 ---
+        self.use_mask = use_mask
 
         self.optimizer = torch.optim.Adam(self.agent.actor_critic.parameters(), lr=lr)
 
@@ -97,7 +108,10 @@ class PPO:
             # 应用掩码并采样动作
             action_logits = action_logits.squeeze(0).squeeze(0)
             legal_mask = torch.from_numpy(info_dict['legal_actions_mask']).to(self.device)
-            dist = self._get_masked_distribution(action_logits, legal_mask)
+            if self.use_mask:
+                dist = self._get_masked_distribution(action_logits, legal_mask)
+            else:
+                dist = torch.distributions.Categorical(logits=action_logits)
 
             action = dist.sample()
             log_prob = dist.log_prob(action)
@@ -203,7 +217,7 @@ class PPO:
 
             # --- 多 Epoch 训练 ---
             for epoch in range(self.epochs):
-
+                print(f"\nEpoch {epoch + 1}/{self.epochs}")
                 # --- 对每条轨迹进行学习 ---
 
                 # 切换到训练模式
@@ -214,6 +228,7 @@ class PPO:
                 self.optimizer.zero_grad()
 
                 break_epoch_loop = False
+                epoch_kl_values = []  # 用于收集当前 epoch 的 KL 值
 
                 for traj_idx, trajectory in enumerate(batch_trajectories):
                     print(
@@ -272,7 +287,11 @@ class PPO:
                         action_logits, new_values, inference_cache = self.agent.actor_critic(model_input, cache_list=inference_cache)
 
                         # 计算新 log_probs, 熵, 和价值
-                        dist = self._get_masked_distribution(action_logits.squeeze(0), legal_masks[start:end])
+                        if self.use_mask:
+                            dist = self._get_masked_distribution(action_logits.squeeze(0), legal_masks[start:end])
+                        else:
+                            dist = torch.distributions.Categorical(logits=action_logits.squeeze(0))
+
                         sub_new_log_probs = dist.log_prob(old_actions[start:end])
                         entropy = dist.entropy()
 
@@ -317,11 +336,17 @@ class PPO:
                     ratios = torch.exp(logratios)
                     approx_kl = ((ratios - 1) - logratios).mean()
 
+                    # 收集 KL 值
+                    epoch_kl_values.append(approx_kl.item())
+
                     print(f"  Training on trajectory {traj_idx + 1}/{len(batch_trajectories)} (approx kl: {approx_kl:>16})")
-                    if approx_kl > self.target_kl:
-                        #break_epoch_loop = True
-                        #break
-                        pass
+
+                    # --- 动态 KL 截断 ---
+                    # 只有当 warmup 结束后，才启用 KL 截断
+                    if self.kl_break_enabled and approx_kl > self.target_kl:
+                        print(f"  [WARNING] Early stopping epoch due to high KL ({approx_kl.item():.4f} > {self.target_kl})")
+                        break_epoch_loop = True
+                        break
 
                     # 计算这条轨迹的平均损失
                     avg_trajectory_loss = trajectory_loss / trajectory_weight
@@ -333,6 +358,21 @@ class PPO:
 
                     # 立即反向传播，梯度会自动累积，避免积累庞大的计算图
                     scaled_loss.backward()
+
+                # --- Epoch 结束后的处理 ---
+                # 计算当前 epoch 的平均 KL
+                avg_approx_kl = np.mean(epoch_kl_values) if epoch_kl_values else 0
+
+                # --- Warmup 检查 ---
+                # 如果 KL 截断尚未启用，则检查是否满足启用条件
+                if not self.kl_break_enabled:
+                    if avg_approx_kl < self.kl_warmup_threshold:
+                        self.kl_break_enabled = True
+                        print(
+                            f"  [INFO] Warmup complete. Average KL ({avg_approx_kl:.6f}) is below threshold ({self.kl_warmup_threshold}). KL clipping is now enabled.")
+                    else:
+                        print(
+                            f"  [INFO] Warmup in progress. Average KL ({avg_approx_kl:.6f}) > threshold ({self.kl_warmup_threshold}).")
 
                 # --- 执行参数更新 ---
                 if not break_epoch_loop:

@@ -169,9 +169,9 @@ def print_model_parameters(model: nn.Module, verbose: bool = True):
     non_trainable_params = 0
 
     if verbose:
-        print(f"{'=' * 60}")
+        print(f"{'=' * 130}")
         print(f"{'Parameter Name':<30} | {'Shape':<20} | {'# Params':<12} | {'Trainable'}")
-        print(f"{'-' * 60}")
+        print(f"{'-' * 130}")
 
     for name, param in model.named_parameters():
         num_params = param.numel()
@@ -186,11 +186,11 @@ def print_model_parameters(model: nn.Module, verbose: bool = True):
         if verbose:
             print(f"{name:>80} | {str(list(param.shape)):>16} | {num_params:>16,} | {is_trainable}")
 
-    print(f"{'=' * 60}")
+    print(f"{'=' * 130}")
     print(f"总参数数量: {total_params:,}")
     print(f"可训练参数数量: {trainable_params:,}")
     print(f"不可训练参数数量: {non_trainable_params:,}")
-    print(f"{'=' * 60}")
+    print(f"{'=' * 130}")
 
 if __name__ == "__main__":
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
