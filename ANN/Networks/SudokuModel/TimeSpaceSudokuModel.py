@@ -192,8 +192,111 @@ def print_model_parameters(model: nn.Module, verbose: bool = True):
     print(f"不可训练参数数量: {non_trainable_params:,}")
     print(f"{'=' * 130}")
 
-if __name__ == "__main__":
+
+def test_chunking_consistency(
+        model: TimeSpaceSudokuModel,
+        device: torch.device,
+        sequence_length: int,
+        chunk_size: int,
+        model_config: SudokuModelConfig
+):
+    """
+    测试模型在分块推理和完整推理下的一致性。
+
+    Args:
+        model (TimeSpaceSudokuModel): 要测试的模型实例。
+        device (torch.device): 计算设备。
+        sequence_length (int): 总序列长度。
+        chunk_size (int): 每个块的大小。
+        model_config (SudokuModelConfig): 模型配置。
+    """
+    print(f"\n--- Testing with Sequence Length={sequence_length}, Chunk Size={chunk_size} ---")
+
+    # 确保模型处于评估模式
+    model.eval()
+
+    # 1. 创建随机输入数据
+    B = 1  # 批次大小固定为1进行测试
+    H = W = model_config.grid_size
+    C = model_config.input_channels
+    full_input = torch.randn(B, sequence_length, H, W, C, device=device)
+
+    # 2. 完整推理 (Full Pass)
+    with torch.no_grad():
+        logits_full, value_full, _ = model(full_input, cache_list=None)
+
+    # 3. 分块推理 (Chunked Pass)
+    logits_chunks = []
+    value_chunks = []
+    chunked_cache = None  # 初始缓存为空
+
+    with torch.no_grad():
+        for i in range(0, sequence_length, chunk_size):
+            # 获取当前块的输入
+            input_chunk = full_input[:, i:i + chunk_size, ...]
+
+            # 使用上一个块的缓存进行推理
+            logits_chunk, value_chunk, chunked_cache = model(input_chunk, cache_list=chunked_cache)
+
+            logits_chunks.append(logits_chunk)
+            value_chunks.append(value_chunk)
+
+    # 将所有块的输出拼接起来
+    logits_chunked_cat = torch.cat(logits_chunks, dim=1)
+    value_chunked_cat = torch.cat(value_chunks, dim=1)
+
+    # 4. 比较结果
+    # 使用 torch.allclose 来比较浮点张量，它允许有微小的容差
+    are_logits_close = torch.allclose(logits_full, logits_chunked_cat, atol=1e-5)
+    are_values_close = torch.allclose(value_full, value_chunked_cat, atol=1e-5)
+
+    print(f"Logits consistency check: {'PASSED' if are_logits_close else 'FAILED'}")
+    print(f"Value consistency check:  {'PASSED' if are_values_close else 'FAILED'}")
+
+    if not are_logits_close:
+        diff = torch.max(torch.abs(logits_full - logits_chunked_cat))
+        print(f"  Max absolute difference in logits: {diff.item()}")
+    if not are_values_close:
+        diff = torch.max(torch.abs(value_full - value_chunked_cat))
+        print(f"  Max absolute difference in values: {diff.item()}")
+
+    return are_logits_close and are_values_close
+
+def test():
+    # 初始化模型
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     model_config = SudokuModelConfig(grid_size=9, input_channels=10)
     actor_critic = TimeSpaceSudokuModel(model_config, device=device)
+
+    # 打印模型参数
     print_model_parameters(model=actor_critic)
+
+    # =========================================================
+    # ============= 开始进行分块推理一致性测试 =================
+    # =========================================================
+
+    total_sequence_length = 64
+    chunk_sizes_to_test = [64, 32, 16, 8, 4, 1]
+
+    all_tests_passed = True
+    for size in chunk_sizes_to_test:
+        if total_sequence_length % size != 0:
+            print(f"Skipping chunk size {size} as it doesn't evenly divide {total_sequence_length}")
+            continue
+
+        passed = test_chunking_consistency(
+            model=actor_critic,
+            device=device,
+            sequence_length=total_sequence_length,
+            chunk_size=size,
+            model_config=model_config
+        )
+        if not passed:
+            all_tests_passed = False
+
+    print("\n" + "=" * 50)
+    if all_tests_passed:
+        print("✅ All chunking consistency tests passed successfully!")
+    else:
+        print("❌ Some chunking consistency tests failed.")
+    print("=" * 50)

@@ -36,10 +36,8 @@ class TimeSpaceChunk(nn.Module):
         # 处理 TimeSpaceBlocks
         if self.timespace_blocks is not None:
             for i, block in enumerate(self.timespace_blocks):
-                if cache_list is not None:
-                    cache = cache_list[i]
-                else:
-                    cache = None
+                cache = cache_list[i] if cache_list is not None else None
+
                 x, cache = checkpoint(block, x, H, W, rotary_emb, cache)
                 new_cache_list.append(cache)
 
