@@ -13,8 +13,8 @@ class SpaceChunk(nn.Module):
         self.device = device
 
         # SpaceBlocks
-        assert self.args.spatialfusion_block_num > 0
-        if self.args.spatialfusion_block_num > 0:
+        assert self.args.spatialfusion_block_num is not None
+        if self.args.spatialfusion_block_num is not None:
             self.space_blocks = nn.ModuleList(
                 [SpatialFusion_block(args.block_args.transformer_args, device) for _ in range(args.spatialfusion_block_num)]
             )

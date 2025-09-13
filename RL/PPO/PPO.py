@@ -6,7 +6,7 @@ from tqdm import tqdm
 import time
 
 from Env.sudoku_env import SudokuEnv
-from Agent.SudokuAgent import SudokuAgent
+from RL.PPO.Agent.SudokuAgent import SudokuAgent
 from ANN.Layers.Mamba2_layer.InferenceCache import Mamba2InferenceCache
 
 

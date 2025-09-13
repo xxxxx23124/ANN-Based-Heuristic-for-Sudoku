@@ -3,9 +3,9 @@
 import torch
 import torch.nn.functional as F
 import numpy as np
-from ANN.Networks.SudokuModel.TimeSpaceSudokuModel import TimeSpaceSudokuModel
+from RL.PPO.SudokuModel.TimeSpaceSudokuModel import TimeSpaceSudokuModel
 from ANN.Layers.Mamba2_layer.InferenceCache import Mamba2InferenceCache
-from ANN.Networks.SudokuModel.SudokuModelConfig import SudokuModelConfig
+from RL.PPO.SudokuModel.SudokuModelConfig import SudokuModelConfig
 
 
 class SudokuAgent:

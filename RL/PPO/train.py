@@ -2,7 +2,7 @@ import torch
 
 from game_collector import GameCollector
 from Env.sudoku_env import SudokuEnv
-from Agent.SudokuAgent import SudokuAgent
+from RL.PPO.Agent.SudokuAgent import SudokuAgent
 from RL.PPO.PPO import PPO
 
 if __name__ == "__main__":

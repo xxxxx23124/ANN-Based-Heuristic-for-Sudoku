@@ -8,7 +8,7 @@ from ANN.Networks.NetworkConfig import NetworkConfig
 from ANN.Layers.Transformer_layer.RotaryEmbedding import RotaryEmbedding
 
 from ANN.Networks.TimeSpaceChunk import TimeSpaceChunk
-from ANN.Networks.SudokuModel.SudokuModelConfig import SudokuModelConfig
+from RL.PPO.SudokuModel.SudokuModelConfig import SudokuModelConfig
 
 
 class SudokuInputEncoder(nn.Module):
@@ -90,7 +90,7 @@ class CriticHead(nn.Module):
         )
 
         # 聚合与输出
-        # B, S, L, D_low -> B, S, L
+        # B, S, L, D -> B, S, L
         value = self.output_head(value).squeeze(-1)
         # B, S, L -> B, S, 1
         value = torch.mean(value, dim=-1, keepdim=True)

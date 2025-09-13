@@ -5,9 +5,9 @@ from ANN.Blocks.BlockConfig import BlockConfig
 class NetworkConfig:
     d_model: int  # model dimension (D)
     max_seq_len: int # max_tokens
-    spatialfusion_block_num:int=0
-    mamba2_block_num:int=0
-    timespaceblock_num:int=0
+    spatialfusion_block_num:int|None=None
+    mamba2_block_num:int|None=None
+    timespaceblock_num:int|None=None
 
     block_args: BlockConfig = field(init=False)
     def __post_init__(self):
