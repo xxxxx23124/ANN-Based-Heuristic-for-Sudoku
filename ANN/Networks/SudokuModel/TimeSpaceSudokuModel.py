@@ -156,6 +156,106 @@ class TimeSpaceSudokuModel(nn.Module):
         return action_logits, value, new_cache_list
 
 
+class TimeSpaceSudokuActorModel(nn.Module):
+    def __init__(self, config: SudokuModelConfig, device: torch.device):
+        super().__init__()
+        self.config = config
+        self.device = device
+
+        # 输入编码器
+        self.encoder = SudokuInputEncoder(config.input_channels, config.embed_dim, device)
+
+        # 核心主干网络
+        self.backbone = TimeSpaceChunk(config.backbone_args, device)
+
+        # 策略头
+        self.actor_head = ActorHead(config.actor_args, config.grid_size, device)
+
+        # 共享的旋转位置编码 (headdim 从 block 配置中获取)
+        # 假设所有Transformer共享相同的headdim
+        # 配置rotary_emb，rotary_emb是根据headdim来的，headdim在Transformer的配置文件中写死为64了
+        self.rotary_emb = RotaryEmbedding(self.config.backbone_args.block_args.transformer_args, device=device)
+
+    def forward(
+            self,
+            x: Tensor,
+            cache_list: list[list[Mamba2InferenceCache]] | None = None,
+    ) -> tuple[Tensor, list[list[Mamba2InferenceCache]]]:
+        B, S, H, W, C = x.shape
+
+        # 分离缓存
+        cache_backbone, cache_actor = None, None
+        if cache_list is not None:
+            cache_backbone, cache_actor = cache_list[0], cache_list[1]
+
+        # 编码输入
+        x_embed = self.encoder(x)  # (B, S, L, D)
+
+        # 通过主干网络
+        x_backbone, new_cache_backbone = self.backbone(
+            x_embed, H, W, self.rotary_emb, cache_backbone
+        )
+
+        # 通过策略头
+        action_logits, new_cache_actor = self.actor_head(
+            x_backbone, H, W, self.rotary_emb, cache_actor
+        )
+
+        # 组合新的缓存
+        new_cache_list = [new_cache_backbone, new_cache_actor]
+
+        return action_logits, new_cache_list
+
+class TimeSpaceSudokuCriticModel(nn.Module):
+    def __init__(self, config: SudokuModelConfig, device: torch.device):
+        super().__init__()
+        self.config = config
+        self.device = device
+
+        # 输入编码器
+        self.encoder = SudokuInputEncoder(config.input_channels, config.embed_dim, device)
+
+        # 核心主干网络
+        self.backbone = TimeSpaceChunk(config.backbone_args, device)
+
+        # 价值头
+        self.critic_head = CriticHead(config.critic_args, device)
+
+        # 共享的旋转位置编码 (headdim 从 block 配置中获取)
+        # 假设所有Transformer共享相同的headdim
+        # 配置rotary_emb，rotary_emb是根据headdim来的，headdim在Transformer的配置文件中写死为64了
+        self.rotary_emb = RotaryEmbedding(self.config.backbone_args.block_args.transformer_args, device=device)
+
+    def forward(
+            self,
+            x: Tensor,
+            cache_list: list[list[Mamba2InferenceCache]] | None = None,
+    ) -> tuple[Tensor, list[list[Mamba2InferenceCache]]]:
+        B, S, H, W, C = x.shape
+
+        # 分离缓存
+        cache_backbone, cache_critic = None, None
+        if cache_list is not None:
+            cache_backbone, cache_critic = cache_list[0], cache_list[1]
+
+        # 编码输入
+        x_embed = self.encoder(x)  # (B, S, L, D)
+
+        # 通过主干网络
+        x_backbone, new_cache_backbone = self.backbone(
+            x_embed, H, W, self.rotary_emb, cache_backbone
+        )
+
+        # 通过价值头
+        value, new_cache_critic = self.critic_head(
+            x_backbone, H, W, self.rotary_emb, cache_critic
+        )
+
+        # 组合新的缓存
+        new_cache_list = [new_cache_backbone, new_cache_critic]
+
+        return value, new_cache_list
+
 def print_model_parameters(model: nn.Module, verbose: bool = True):
     """
     打印模型的详细参数信息，并返回参数总数。
